@@ -1,15 +1,7 @@
 module.exports = (sequelize, Model, DataTypes) => {
     class User extends Model {
         static associate(models) {
-            // Notes this user owns.
-            User.hasMany(models.Note, {
-                as: "ownedNotes",
-                foreignKey: { name: "userId", allowNull: false },
-                onDelete: "CASCADE",
-                onUpdate: "CASCADE",
-            });
-
-            // Notes shared with this user by others.
+            User.hasMany(models.Note, { as: "ownedNotes", foreignKey: "userId", onDelete: "CASCADE" });
             User.belongsToMany(models.Note, {
                 through: models.NoteShare,
                 as: "sharedNotes",
@@ -21,31 +13,12 @@ module.exports = (sequelize, Model, DataTypes) => {
 
     User.init(
         {
-            id: {
-                type: DataTypes.INTEGER,
-                allowNull: false,
-                autoIncrement: true,
-                primaryKey: true,
-            },
-            name: {
-                type: DataTypes.STRING,
-                allowNull: false,
-            },
-            email: {
-                type: DataTypes.STRING,
-                allowNull: false,
-                unique: true,
-            },
-            password: {
-                type: DataTypes.STRING,
-                allowNull: false,
-            },
+            id: { type: DataTypes.INTEGER, allowNull: false, autoIncrement: true, primaryKey: true },
+            name: { type: DataTypes.STRING, allowNull: false },
+            email: { type: DataTypes.STRING, allowNull: false, unique: true },
+            password: { type: DataTypes.STRING, allowNull: false },
         },
-        {
-            sequelize,
-            modelName: "User",
-            tableName: "users",
-        }
+        { sequelize, modelName: "User", tableName: "users" }
     );
 
     return User;
