@@ -5,6 +5,7 @@ const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, ".env") });
 
 const { sequelize } = require("./db/db");
+require("./models"); // register all models so sequelize.sync() picks them up
 
 const PORT = Number(process.env.PORT) || 8000;
 

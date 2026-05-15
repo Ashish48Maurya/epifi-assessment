@@ -11,11 +11,15 @@ module.exports = {
     dialectOptions:
         process.env.DB_SSL === "true"
             ? {
-                  ssl: {
-                      require: true,
-                      rejectUnauthorized:
-                          process.env.DB_SSL_REJECT_UNAUTHORIZED === "true",
-                  },
-              }
+                ssl: {
+                    require: true,
+                    rejectUnauthorized:
+                        process.env.DB_SSL_REJECT_UNAUTHORIZED === "true",
+                },
+            }
             : {},
+    define: {
+        timestamps: true,
+        underscored: true,
+    },
 };

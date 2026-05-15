@@ -11,7 +11,8 @@ const sequelize = new Sequelize(
         dialect: dbConfig.dialect,
         logging: false,
         pool: { max: 10, min: 0, acquire: 300000, idle: 100000 },
-        dialectOptions: dbConfig.dialectOptions || {}, // SSL config when DB_SSL=true
+        dialectOptions: dbConfig.dialectOptions || {},
+        define: dbConfig.define || {},
     }
 );
 
