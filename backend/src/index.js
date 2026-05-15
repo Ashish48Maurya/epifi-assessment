@@ -6,6 +6,7 @@ require("dotenv").config({ path: path.resolve(__dirname, ".env") });
 
 const { sequelize } = require("./db/db");
 require("./models"); // register all models so sequelize.sync() picks them up
+const apiRouter = require("./routes");
 
 const PORT = Number(process.env.PORT) || 8000;
 
@@ -15,7 +16,8 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors({ origin: true, credentials: true }));
-// app.use('/v1/api',)
+
+app.use("/v1/api", apiRouter);
 
 app.get("/health", async (req, res) => {
     try {

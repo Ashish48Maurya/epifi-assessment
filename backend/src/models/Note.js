@@ -21,7 +21,7 @@ module.exports = (sequelize, Model, DataTypes) => {
             type: { type: DataTypes.ENUM(...NOTE_TYPES), allowNull: false, defaultValue: "text" },
             note: { type: DataTypes.TEXT, allowNull: true },
             images: { type: DataTypes.ARRAY(DataTypes.TEXT), allowNull: true },
-            lists: { type: DataTypes.ARRAY(DataTypes.TEXT), allowNull: true },
+            lists: { type: DataTypes.JSONB, allowNull: true },
         },
         {
             sequelize,
