@@ -5,6 +5,16 @@ const {
 } = require("../controllers/notes.controller");
 
 const router = express.Router();
+
+router.param("id", (req, res, next, value) => {
+    const n = Number.parseInt(value, 10);
+    if (!Number.isInteger(n) || n <= 0 || String(n) !== String(value).trim()) {
+        return res.status(400).json({ message: "Invalid id parameter" });
+    }
+    req.params.id = n;
+    next();
+});
+
 router.use(requireAuth);
 
 router.post("/", create); //was_there

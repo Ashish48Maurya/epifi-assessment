@@ -4,7 +4,36 @@ const { sendMail } = require("../utils/mailer");
 const { emitToUser } = require("../socket");
 
 const BIN_DAYS = Note.BIN_RETENTION_DAYS;
+const MAX_ASSIGN_EMAILS = 50;
 const binCutoff = () => new Date(Date.now() - BIN_DAYS * 24 * 60 * 60 * 1000);
+
+const NOTE_WITH_PEOPLE_INCLUDE = [
+    { model: User, as: "owner", attributes: ["id", "name", "email"] },
+    {
+        model: NoteShare,
+        as: "shares",
+        attributes: ["userId", "createdAt"],
+        include: [{ model: User, attributes: ["id", "name", "email"] }],
+    },
+];
+
+function shapeNote(noteInstance, meId, sharedSet) {
+    const json = noteInstance.toJSON();
+    const sharedWith = (json.shares || []).map((ns) => ({
+        id: ns.User?.id,
+        name: ns.User?.name,
+        email: ns.User?.email,
+        sharedAt: ns.createdAt,
+    }));
+    delete json.shares;
+    const role =
+        noteInstance.userId === meId
+            ? "owner"
+            : sharedSet?.has(noteInstance.id) || sharedWith.some((u) => u.id === meId)
+                ? "shared"
+                : null;
+    return { ...json, role, sharedWith };
+}
 
 async function loadNoteWithAccess(noteId, userId) {
     const note = await Note.findByPk(noteId);
@@ -53,6 +82,7 @@ async function list(req, res) {
             attributes: ["noteId"],
         });
         const sharedNoteIds = sharedRows.map((s) => s.noteId);
+        const sharedSet = new Set(sharedNoteIds);
 
         const access = sharedNoteIds.length
             ? { [Op.or]: [{ userId: me }, { id: { [Op.in]: sharedNoteIds } }] }
@@ -74,16 +104,15 @@ async function list(req, res) {
 
         const { count, rows } = await Note.findAndCountAll({
             where,
+            include: NOTE_WITH_PEOPLE_INCLUDE,
             order: [["updatedAt", "DESC"]],
             limit,
             offset,
+            distinct: true,
+            subQuery: false,
         });
 
-        const sharedSet = new Set(sharedNoteIds);
-        const data = rows.map((n) => ({
-            ...n.toJSON(),
-            role: n.userId === me ? "owner" : sharedSet.has(n.id) ? "shared" : null,
-        }));
+        const data = rows.map((n) => shapeNote(n, me, sharedSet));
 
         return res.json({
             message: q ? `Found ${count} note(s) matching "${q}"` : `Fetched ${count} note(s)`,
@@ -126,10 +155,16 @@ async function listBin(req, res) {
 
 async function getOne(req, res) {
     try {
-        const { note, role } = await loadNoteWithAccess(req.params.id, req.user.id);
+        const me = req.user.id;
+        const note = await Note.findByPk(req.params.id, { include: NOTE_WITH_PEOPLE_INCLUDE });
         if (!note) return res.status(404).json({ message: "Note not found" });
+
+        let role = null;
+        if (note.userId === me) role = "owner";
+        else if ((note.shares || []).some((ns) => ns.userId === me)) role = "shared";
         if (!role) return res.status(403).json({ message: "Forbidden" });
-        return res.json({ message: "Note fetched", note, role });
+
+        return res.json({ message: "Note fetched", note: shapeNote(note, me), role });
     } catch (err) {
         console.error("notes.getOne error:", err);
         return res.status(500).json({ message: "Failed to fetch note" });
@@ -152,12 +187,9 @@ async function update(req, res) {
 
         const editorId = req.user.id;
         const recipients = new Set();
-
         if (note.userId !== editorId) recipients.add(note.userId);
-
         const shares = await NoteShare.findAll({ where: { noteId: note.id }, attributes: ["userId"] });
         for (const s of shares) if (s.userId !== editorId) recipients.add(s.userId);
-
         const payload = { note: note.toJSON(), updatedBy: editorId };
         for (const uid of recipients) emitToUser(uid, "note:updated", payload);
 
@@ -186,9 +218,7 @@ async function remove(req, res) {
                 await note.destroy({ transaction: t });
             });
 
-            for (const uid of sharedUserIds) {
-                emitToUser(uid, "note:unshared", { noteId: note.id });
-            }
+            for (const uid of sharedUserIds) emitToUser(uid, "note:unshared", { noteId: note.id });
 
             const expiresAt = new Date(Date.now() + BIN_DAYS * 24 * 60 * 60 * 1000);
             return res.json({
@@ -256,6 +286,11 @@ async function assign(req, res) {
         if (targets.length === 0) {
             return res.status(400).json({ message: "Provide at least one email in `emails` (array) or `email` (string)" });
         }
+        if (targets.length > MAX_ASSIGN_EMAILS) {
+            return res.status(400).json({
+                message: `Too many recipients in one request. Limit is ${MAX_ASSIGN_EMAILS}; you sent ${targets.length}.`,
+            });
+        }
 
         const note = await Note.findByPk(noteId);
         if (!note) return res.status(404).json({ message: "Note not found" });
@@ -265,46 +300,43 @@ async function assign(req, res) {
 
         const owner = await User.findByPk(req.user.id, { attributes: ["id", "name", "email"] });
         const title = note.title || `Note #${note.id}`;
-        const results = [];
 
-        for (const e of targets) {
-            try {
-                if (e === owner.email) {
-                    results.push({ email: e, status: "skipped_self" });
-                    continue;
+        const results = await Promise.all(
+            targets.map(async (e) => {
+                try {
+                    if (e === owner.email) return { email: e, status: "skipped_self" };
+
+                    const target = await User.findOne({ where: { email: e } });
+                    if (!target) return { email: e, status: "user_not_found" };
+
+                    const [, created] = await NoteShare.findOrCreate({
+                        where: { noteId: note.id, userId: target.id },
+                        defaults: { noteId: note.id, userId: target.id },
+                    });
+
+                    emitToUser(target.id, "note:shared", {
+                        note: note.toJSON(),
+                        sharedBy: { id: owner.id, name: owner.name, email: owner.email },
+                        isNew: created,
+                    });
+
+                    sendMail({
+                        to: target.email,
+                        subject: `${owner.name} shared a note with you: "${title}"`,
+                        text:
+                            `Hi ${target.name},\n\n` +
+                            `${owner.name} (${owner.email}) ${created ? "shared" : "re-shared"} a note with you: "${title}".\n` +
+                            `You have full read and write access.\n\n` +
+                            `— Epifi Notes`,
+                    }).catch((err) => console.error("assign mail error:", err));
+
+                    return { email: e, status: created ? "shared" : "already_shared" };
+                } catch (err) {
+                    console.error(`assign error for ${e}:`, err);
+                    return { email: e, status: "error", error: err.message };
                 }
-                const target = await User.findOne({ where: { email: e } });
-                if (!target) {
-                    results.push({ email: e, status: "user_not_found" });
-                    continue;
-                }
-                const [, created] = await NoteShare.findOrCreate({
-                    where: { noteId: note.id, userId: target.id },
-                    defaults: { noteId: note.id, userId: target.id },
-                });
-
-                emitToUser(target.id, "note:shared", {
-                    note: note.toJSON(),
-                    sharedBy: { id: owner.id, name: owner.name, email: owner.email },
-                    isNew: created,
-                });
-
-                sendMail({
-                    to: target.email,
-                    subject: `${owner.name} shared a note with you: "${title}"`,
-                    text:
-                        `Hi ${target.name},\n\n` +
-                        `${owner.name} (${owner.email}) ${created ? "shared" : "re-shared"} a note with you: "${title}".\n` +
-                        `You have full read and write access.\n\n` +
-                        `— Epifi Notes`,
-                }).catch((err) => console.error("assign mail error:", err));
-
-                results.push({ email: e, status: created ? "shared" : "already_shared" });
-            } catch (err) {
-                console.error(`assign error for ${e}:`, err);
-                results.push({ email: e, status: "error", error: err.message });
-            }
-        }
+            })
+        );
 
         const sharedCount = results.filter((r) => r.status === "shared").length;
         return res.status(200).json({
