@@ -4,6 +4,7 @@ const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const path = require("path");
 require("dotenv").config({ path: path.resolve(__dirname, ".env") });
+const { developerInfo } = require("./controllers/auth.controller")
 
 const { sequelize } = require("./db/db");
 require("./models");
@@ -21,9 +22,6 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors({ origin: true, credentials: true }));
 
-app.use("/v1/api", apiRouter);
-
-// Static OpenAPI document. Lives alongside this file at src/openapi.json.
 app.get("/openapi.json", (req, res) => {
     res.sendFile(path.join(__dirname, "openapi.json"));
 });
@@ -36,6 +34,10 @@ app.get("/health", async (req, res) => {
         res.status(503).json({ status: "degraded", db: "disconnected" });
     }
 });
+
+app.get('/about', developerInfo)
+
+app.use("/v1/api", apiRouter);
 
 async function startServer() {
     try {
