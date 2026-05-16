@@ -9,13 +9,12 @@ router.post("/register", register);
 router.post("/login", login);
 router.post("/logout", logout);
 
-// Convenience: get the current user from the token.
 router.get("/me", requireAuth, async (req, res) => {
     const user = await User.findByPk(req.user.id, {
         attributes: ["id", "name", "email", "createdAt"],
     });
     if (!user) return res.status(404).json({ message: "User not found" });
-    res.json({ user });
+    res.json({ message: "Current user fetched", user });
 });
 
 module.exports = router;

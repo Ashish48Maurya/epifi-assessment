@@ -1,6 +1,5 @@
 const { verifyToken } = require("../utils/jwt");
 
-// Reads token from Authorization: Bearer <token> or from a `token` cookie.
 function requireAuth(req, res, next) {
     let token = null;
     const header = req.headers.authorization || "";

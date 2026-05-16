@@ -4,12 +4,7 @@ module.exports = (sequelize, Model, DataTypes) => {
     class Note extends Model {
         static associate(models) {
             Note.belongsTo(models.User, { as: "owner", foreignKey: "userId", onDelete: "CASCADE" });
-            Note.belongsToMany(models.User, {
-                through: models.NoteShare,
-                as: "sharedWith",
-                foreignKey: "noteId",
-                otherKey: "userId",
-            });
+            Note.hasMany(models.NoteShare, { as: "shares", foreignKey: "noteId", onDelete: "CASCADE" });
         }
     }
 
@@ -27,6 +22,7 @@ module.exports = (sequelize, Model, DataTypes) => {
             sequelize,
             modelName: "Note",
             tableName: "notes",
+            paranoid: true,
             validate: {
                 payloadMatchesType() {
                     if (this.type === "text" && (!this.note || !String(this.note).trim())) {
@@ -44,5 +40,6 @@ module.exports = (sequelize, Model, DataTypes) => {
     );
 
     Note.TYPES = NOTE_TYPES;
+    Note.BIN_RETENTION_DAYS = 7;
     return Note;
 };

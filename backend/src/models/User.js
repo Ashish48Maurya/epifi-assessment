@@ -2,12 +2,7 @@ module.exports = (sequelize, Model, DataTypes) => {
     class User extends Model {
         static associate(models) {
             User.hasMany(models.Note, { as: "ownedNotes", foreignKey: "userId", onDelete: "CASCADE" });
-            User.belongsToMany(models.Note, {
-                through: models.NoteShare,
-                as: "sharedNotes",
-                foreignKey: "userId",
-                otherKey: "noteId",
-            });
+            User.hasMany(models.NoteShare, { foreignKey: "userId", onDelete: "CASCADE" });
         }
     }
 
