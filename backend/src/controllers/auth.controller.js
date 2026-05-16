@@ -70,4 +70,15 @@ function logout(req, res) {
     return res.json({ message: "Logged out" });
 }
 
-module.exports = { register, login, logout };
+function developerInfo(req, res) {
+    return res.json({
+        name: "Ashish Maurya",
+        email: "maurya.48.ashish@gmail.com",
+        my_feature: {
+            "see_bin": "I implemented a 'bin' for deleted notes. When a note is deleted, it's not immediately removed from the database. Instead, it's marked as deleted and moved to the bin. Users can view their bin, restore notes from it, or permanently delete them. This provides an extra layer of safety against accidental deletions.",
+            "real_time_note_update": "I implemented real-time note updates using Socket.IO. When a user edits or assigns a note, the changes are immediately reflected across all connected clients, providing a seamless collaborative experience."
+        }
+    });
+}
+
+module.exports = { register, login, logout, developerInfo };

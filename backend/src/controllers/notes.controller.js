@@ -1,6 +1,7 @@
 const { Op } = require("sequelize");
 const { Note, User, NoteShare, sequelize } = require("../models");
 const { sendMail } = require("../utils/mailer");
+const { emitToUser } = require("../socket");
 
 const BIN_DAYS = Note.BIN_RETENTION_DAYS;
 const binCutoff = () => new Date(Date.now() - BIN_DAYS * 24 * 60 * 60 * 1000);
@@ -100,10 +101,7 @@ async function listBin(req, res) {
     try {
         const { page, limit, offset } = parsePagination(req.query);
         const { count, rows } = await Note.findAndCountAll({
-            where: {
-                userId: req.user.id,
-                deletedAt: { [Op.gte]: binCutoff() },
-            },
+            where: { userId: req.user.id, deletedAt: { [Op.gte]: binCutoff() } },
             paranoid: false,
             order: [["deletedAt", "DESC"]],
             limit,
@@ -152,6 +150,17 @@ async function update(req, res) {
         if (lists !== undefined) note.lists = lists;
         await note.save();
 
+        const editorId = req.user.id;
+        const recipients = new Set();
+
+        if (note.userId !== editorId) recipients.add(note.userId);
+
+        const shares = await NoteShare.findAll({ where: { noteId: note.id }, attributes: ["userId"] });
+        for (const s of shares) if (s.userId !== editorId) recipients.add(s.userId);
+
+        const payload = { note: note.toJSON(), updatedBy: editorId };
+        for (const uid of recipients) emitToUser(uid, "note:updated", payload);
+
         return res.json({ message: "Note updated", note });
     } catch (err) {
         if (err.name === "SequelizeValidationError") {
@@ -169,10 +178,18 @@ async function remove(req, res) {
         if (!note) return res.status(404).json({ message: "Note not found" });
 
         if (role === "owner") {
+            const shares = await NoteShare.findAll({ where: { noteId: note.id }, attributes: ["userId"] });
+            const sharedUserIds = shares.map((s) => s.userId);
+
             await sequelize.transaction(async (t) => {
                 await NoteShare.destroy({ where: { noteId: note.id }, transaction: t });
                 await note.destroy({ transaction: t });
             });
+
+            for (const uid of sharedUserIds) {
+                emitToUser(uid, "note:unshared", { noteId: note.id });
+            }
+
             const expiresAt = new Date(Date.now() + BIN_DAYS * 24 * 60 * 60 * 1000);
             return res.json({
                 message: `Moved to bin. Will be permanently deleted on ${expiresAt.toISOString()}. Removed from shared users' lists.`,
@@ -182,6 +199,7 @@ async function remove(req, res) {
 
         if (role === "shared") {
             await NoteShare.destroy({ where: { noteId: note.id, userId: me } });
+            emitToUser(me, "note:unshared", { noteId: note.id });
             return res.json({ message: "Removed from your shared notes" });
         }
 
@@ -230,116 +248,72 @@ async function permanentlyDelete(req, res) {
 
 async function assign(req, res) {
     try {
-        const noteId = req.params.id;
-        const { emails } = req.body || {};
+        const { email, emails, noteId } = req.body || {};
+        if (!noteId) return res.status(400).json({ message: "noteId is required" });
 
-        if (!noteId || !Array.isArray(emails)) {
-            return res.status(400).json({
-                message: "noteId and email(s) are required"
-            });
+        const list = Array.isArray(emails) ? emails : email ? [email] : [];
+        const targets = [...new Set(list.map((e) => (typeof e === "string" ? e.trim() : "")).filter(Boolean))];
+        if (targets.length === 0) {
+            return res.status(400).json({ message: "Provide at least one email in `emails` (array) or `email` (string)" });
         }
 
         const note = await Note.findByPk(noteId);
-
-        if (!note) {
-            return res.status(404).json({
-                message: "Note not found"
-            });
-        }
-
+        if (!note) return res.status(404).json({ message: "Note not found" });
         if (note.userId !== req.user.id) {
-            return res.status(403).json({
-                message: "Only the owner can share this note"
-            });
+            return res.status(403).json({ message: "Only the owner can share this note" });
         }
 
-        const owner = await User.findByPk(req.user.id, {
-            attributes: ["id", "name", "email"]
-        });
-
+        const owner = await User.findByPk(req.user.id, { attributes: ["id", "name", "email"] });
         const title = note.title || `Note #${note.id}`;
-
         const results = [];
 
-        for (const e of emails) {
+        for (const e of targets) {
             try {
-
                 if (e === owner.email) {
-                    results.push({
-                        email: e,
-                        status: "skipped_self"
-                    });
+                    results.push({ email: e, status: "skipped_self" });
                     continue;
                 }
-
-                const target = await User.findOne({
-                    where: { email: e }
-                });
-
+                const target = await User.findOne({ where: { email: e } });
                 if (!target) {
-                    results.push({
-                        email: e,
-                        status: "user_not_found"
-                    });
+                    results.push({ email: e, status: "user_not_found" });
                     continue;
                 }
-
                 const [, created] = await NoteShare.findOrCreate({
-                    where: {
-                        noteId: note.id,
-                        userId: target.id
-                    },
-                    defaults: {
-                        noteId: note.id,
-                        userId: target.id
-                    },
+                    where: { noteId: note.id, userId: target.id },
+                    defaults: { noteId: note.id, userId: target.id },
                 });
 
-                try {
-                    await sendMail({
-                        to: target.email,
-                        subject: `${owner.name} shared a note with you: "${title}"`,
-                        text:
-                            `Hi ${target.name},\n\n` +
-                            `${owner.name} (${owner.email}) ${created ? "shared" : "re-shared"} a note with you: "${title}".\n` +
-                            `You have full read and write access.\n\n` +
-                            `— Epifi Notes`,
-                    });
-                } catch (mailErr) {
-                    console.error("assign mail error:", mailErr);
-                }
-
-                results.push({
-                    email: e,
-                    status: created ? "shared" : "already_shared"
+                emitToUser(target.id, "note:shared", {
+                    note: note.toJSON(),
+                    sharedBy: { id: owner.id, name: owner.name, email: owner.email },
+                    isNew: created,
                 });
 
+                sendMail({
+                    to: target.email,
+                    subject: `${owner.name} shared a note with you: "${title}"`,
+                    text:
+                        `Hi ${target.name},\n\n` +
+                        `${owner.name} (${owner.email}) ${created ? "shared" : "re-shared"} a note with you: "${title}".\n` +
+                        `You have full read and write access.\n\n` +
+                        `— Epifi Notes`,
+                }).catch((err) => console.error("assign mail error:", err));
+
+                results.push({ email: e, status: created ? "shared" : "already_shared" });
             } catch (err) {
                 console.error(`assign error for ${e}:`, err);
-
-                results.push({
-                    email: e,
-                    status: "error",
-                    error: err.message
-                });
+                results.push({ email: e, status: "error", error: err.message });
             }
         }
 
-        const sharedCount = results.filter(
-            (r) => r.status === "shared"
-        ).length;
-
+        const sharedCount = results.filter((r) => r.status === "shared").length;
         return res.status(200).json({
-            message: `Shared with ${sharedCount} of ${emails.length} user(s). See results for details.`,
+            message: `Shared with ${sharedCount} of ${targets.length} user(s). See results for details.`,
             results,
         });
-
     } catch (err) {
         console.error("notes.assign error:", err);
-
-        return res.status(500).json({
-            message: "Failed to share note"
-        });
+        return res.status(500).json({ message: "Failed to share note" });
     }
 }
 

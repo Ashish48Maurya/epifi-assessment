@@ -1,3 +1,4 @@
+const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
@@ -7,9 +8,9 @@ require("dotenv").config({ path: path.resolve(__dirname, ".env") });
 const { sequelize } = require("./db/db");
 require("./models");
 const apiRouter = require("./routes");
+const { attachSocketServer } = require("./socket");
 
 const PORT = Number(process.env.PORT) || 8000;
-const PURGE_INTERVAL_MS = 60 * 60 * 1000; // every hour
 
 const app = express();
 
@@ -37,13 +38,15 @@ async function startServer() {
 
         await sequelize.sync();
 
-        const server = app.listen(PORT, () => {
-            console.log(`Server running on port ${PORT}`);
-        });
+        const server = http.createServer(app);
+        attachSocketServer(server);
+
+        server.listen(PORT, () => {
+            console.log(`Server running on port ${PORT} (HTTP + Socket.IO)`);
+        })
 
         const shutdown = async (signal) => {
             console.log(`\n${signal} received. Shutting down gracefully...`);
-            clearInterval(purgeTimer);
             server.close(async () => {
                 try {
                     await sequelize.close();
