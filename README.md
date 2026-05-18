@@ -6,6 +6,7 @@ This repository contains a simple notes application with a backend API and a Nex
 Deployed services
 
 - **Backend base URL:** https://epifi-assessment.onrender.com
+- **Example backend endpoint (about):** https://epifi-assessment.onrender.com/about
 - **Example backend endpoint (login):** https://epifi-assessment.onrender.com/v1/api/login
 - **Frontend URL:** https://epifi-assessment.vercel.app/
 
